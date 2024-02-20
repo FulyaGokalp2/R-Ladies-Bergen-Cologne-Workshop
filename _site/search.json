@@ -1,0 +1,65 @@
+[
+  {
+    "objectID": "analysis.html",
+    "href": "analysis.html",
+    "title": "Nominal house prices data in Luxembourg",
+    "section": "",
+    "text": "commune_level_data &lt;- read.csv(\"datasets/house_prices_commune_level_data.csv\")\ncountry_level_data &lt;- read.csv(\"datasets/house_prices_country_level_data.csv\")"
+  },
+  {
+    "objectID": "analysis.html#plot-for-commune-luxembourg",
+    "href": "analysis.html#plot-for-commune-luxembourg",
+    "title": "Nominal house prices data in Luxembourg",
+    "section": "Plot for commune: Luxembourg",
+    "text": "Plot for commune: Luxembourg"
+  },
+  {
+    "objectID": "analysis.html#plot-for-commune-esch-sur-alzette",
+    "href": "analysis.html#plot-for-commune-esch-sur-alzette",
+    "title": "Nominal house prices data in Luxembourg",
+    "section": "Plot for commune: Esch-sur-Alzette",
+    "text": "Plot for commune: Esch-sur-Alzette"
+  },
+  {
+    "objectID": "analysis.html#plot-for-commune-mamer",
+    "href": "analysis.html#plot-for-commune-mamer",
+    "title": "Nominal house prices data in Luxembourg",
+    "section": "Plot for commune: Mamer",
+    "text": "Plot for commune: Mamer"
+  },
+  {
+    "objectID": "analysis.html#plot-for-commune-schengen",
+    "href": "analysis.html#plot-for-commune-schengen",
+    "title": "Nominal house prices data in Luxembourg",
+    "section": "Plot for commune: Schengen",
+    "text": "Plot for commune: Schengen"
+  },
+  {
+    "objectID": "analysis.html#plot-for-commune-wincrange",
+    "href": "analysis.html#plot-for-commune-wincrange",
+    "title": "Nominal house prices data in Luxembourg",
+    "section": "Plot for commune: Wincrange",
+    "text": "Plot for commune: Wincrange"
+  },
+  {
+    "objectID": "analysis.html#lasso",
+    "href": "analysis.html#lasso",
+    "title": "Nominal house prices data in Luxembourg",
+    "section": "LASSO",
+    "text": "LASSO"
+  },
+  {
+    "objectID": "analysis.html#scad",
+    "href": "analysis.html#scad",
+    "title": "Nominal house prices data in Luxembourg",
+    "section": "SCAD",
+    "text": "SCAD"
+  },
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "Nominal house prices data in Luxembourg - Data cleaning",
+    "section": "",
+    "text": "Load Libraries\n\nlibrary(dplyr)\nlibrary(ggplot2)\nlibrary(janitor)\nlibrary(purrr)\nlibrary(readxl)\nlibrary(rvest)\nlibrary(stringr)\n\n## Downloading the data\n\n\n\nGetting the Data\nThis data is downloaded from the Luxembourguish Open Data Portal (the data set called Série rétrospective des prix annoncés des maisons par commune, de 2010 à 2021), and the original data is from the “Observatoire de l’habitat”. This data contains prices for houses sold since 2010 for each luxembourguish commune.\nThe function below uses the permanent URL from the Open Data Portal to access the data, but I have also rehosted the data, and use my link to download the data (for archival purposes):\n\nget_raw_data &lt;- function(url = \"https://data.public.lu/fr/datasets/r/14b0156e-ff87-4a36-a867-933fc9a6f903\"){\n\n  raw_data &lt;- tempfile(fileext = \".xlsx\")\n\n  download.file(url,\n                raw_data,\n                mode = \"wb\") # for compatibility with Windows\n\n  sheets &lt;- excel_sheets(raw_data)\n\n  read_clean &lt;- function(..., sheet){\n    read_excel(..., sheet = sheet) %&gt;%\n      mutate(year = sheet)\n  }\n\n  raw_data &lt;- map_dfr(sheets,\n                      ~read_clean(raw_data,\n                                  skip = 10,\n                                  sheet = .)) %&gt;%\n    clean_names()\n\n  raw_data %&gt;%\n    rename(locality = commune,\n           n_offers = nombre_doffres,\n           average_price_nominal_euros = prix_moyen_annonce_en_courant,\n           average_price_m2_nominal_euros = prix_moyen_annonce_au_m2_en_courant,\n           average_price_m2_nominal_euros = prix_moyen_annonce_au_m2_en_courant\n           ) %&gt;%\n    mutate(locality = str_trim(locality)) %&gt;%\n    select(year, locality, n_offers, starts_with(\"average\"))\n\n}\n\n\nraw_data &lt;- get_raw_data(url = \"https://github.com/b-rodrigues/rap4all/raw/master/datasets/vente-maison-2010-2021.xlsx\")\n\nNew names:\n• `*` -&gt; `*...3`\n• `*` -&gt; `*...4`\n\n\n\n\nClean the Data\nWe need clean the data: “Luxembourg” is “Luxembourg-ville” in 2010 and 2011, then “Luxembourg”. “Pétange” is also spelled non-consistently, and we also need to convert columns to right type. We also directly remove rows where the locality contains information on the “Source”:\n\nclean_raw_data &lt;- function(raw_data){\n  raw_data %&gt;%\n    mutate(locality = ifelse(grepl(\"Luxembourg-Ville\", locality),\n                             \"Luxembourg\",\n                             locality),\n           locality = ifelse(grepl(\"P.tange\", locality),\n                             \"Pétange\",\n                             locality)\n           ) %&gt;%\n    filter(!grepl(\"Source\", locality)) %&gt;%\n    mutate(across(starts_with(\"average\"), as.numeric))\n}\n\n\nflat_data &lt;- clean_raw_data(raw_data)\n\nWarning: There were 2 warnings in `mutate()`.\nThe first warning was:\nℹ In argument: `across(starts_with(\"average\"), as.numeric)`.\nCaused by warning:\n! NAs introduced by coercion\nℹ Run `dplyr::last_dplyr_warnings()` to see the 1 remaining warning.\n\n\nWe now need to make sure that we got all the communes/localities in there. There were mergers in 2011, 2015 and 2018. So we need to account for these localities.\nWe’re now scraping data from wikipedia of former Luxembourguish communes:\n\nget_former_communes &lt;- function(\n            url = \"https://is.gd/lux_former_communes\",\n            min_year = 2009,\n            table_position = 3\n            ){\n\n  read_html(url) %&gt;%\n    html_table() %&gt;%\n    pluck(table_position) %&gt;%\n    clean_names() %&gt;%\n    filter(year_dissolved &gt; min_year)\n}\n\n\nformer_communes &lt;- get_former_communes()\n\nWe can scrape current communes:\n\nget_current_communes &lt;- function(\n                 url = \"https://is.gd/lux_communes\",\n                 table_position = 2\n                 ){\n\n  read_html(url) |&gt;\n    html_table() |&gt;\n    pluck(table_position) |&gt;\n    clean_names() |&gt;\n    filter(name_2 != \"Name\") |&gt;\n    rename(commune = name_2) |&gt;\n    mutate(commune = str_remove(commune, \" .$\"))\n\n}\n\n\ncurrent_communes &lt;- get_current_communes()\n\nLet’s now create a list of all communes:\n\nget_test_communes &lt;- function(former_communes, current_communes){\n\n  communes &lt;- unique(c(former_communes$name, current_communes$commune))\n  # we need to rename some communes\n\n  # Different spelling of these communes between wikipedia and the data\n\n  communes[which(communes == \"Clemency\")] &lt;- \"Clémency\"\n  communes[which(communes == \"Redange\")] &lt;- \"Redange-sur-Attert\"\n  communes[which(communes == \"Erpeldange-sur-Sûre\")] &lt;- \"Erpeldange\"\n  communes[which(communes == \"Luxembourg City\")] &lt;- \"Luxembourg\"\n  communes[which(communes == \"Käerjeng\")] &lt;- \"Kaerjeng\"\n  communes[which(communes == \"Petange\")] &lt;- \"Pétange\"\n\n  communes\n}\n\n\nformer_communes &lt;- get_former_communes()\ncurrent_communes &lt;- get_current_communes()\n\ncommunes &lt;- get_test_communes(former_communes, current_communes)\n\nLet’s test to see if all the communes from our dataset are represented.\n\nsetdiff(flat_data$locality, communes)\n\n[1] NA                  \"Moyenne nationale\" \"Total d'offres\"   \n\n\nIf the above code doesn’t show any communes, then this means that we are accounting for every commune.\nLet’s keep the national average in another dataset:\n\nmake_country_level_data &lt;- function(flat_data){\n  country_level &lt;- flat_data %&gt;%\n    filter(grepl(\"nationale\", locality)) %&gt;%\n    select(-n_offers)\n\n  offers_country &lt;- flat_data %&gt;%\n    filter(grepl(\"Total d.offres\", locality)) %&gt;%\n    select(year, n_offers)\n\n  full_join(country_level, offers_country) %&gt;%\n    select(year, locality, n_offers, everything()) %&gt;%\n    mutate(locality = \"Grand-Duchy of Luxembourg\")\n\n}\n\n\ncountry_level_data &lt;- make_country_level_data(flat_data)\n\nJoining with `by = join_by(year)`\n\ncountry_level_data\n\n# A tibble: 11 × 5\n   year  locality         n_offers average_price_nomina…¹ average_price_m2_nom…²\n   &lt;chr&gt; &lt;chr&gt;               &lt;dbl&gt;                  &lt;dbl&gt;                  &lt;dbl&gt;\n 1 2010  Grand-Duchy of …    19278                569216                   3251 \n 2 2011  Grand-Duchy of …    21253                597785.                  3375.\n 3 2012  Grand-Duchy of …    14773                596348.                  3409.\n 4 2013  Grand-Duchy of …    13298                644885.                  3590.\n 5 2014  Grand-Duchy of …     9852                663640.                  3647.\n 6 2015  Grand-Duchy of …     9630                724342                   3943 \n 7 2016  Grand-Duchy of …     9332                754509.                  4124.\n 8 2017  Grand-Duchy of …    16055                812919.                  4274.\n 9 2018  Grand-Duchy of …    13534                874686.                  4562.\n10 2019  Grand-Duchy of …    12171                970589.                  5039.\n11 2020  Grand-Duchy of …    11757               1180467.                  6364.\n# ℹ abbreviated names: ¹​average_price_nominal_euros,\n#   ²​average_price_m2_nominal_euros\n\n\nWe can finish cleaning the commune data:\n\nmake_commune_level_data &lt;- function(flat_data){\n  flat_data %&gt;%\n    filter(!grepl(\"nationale|offres\", locality),\n           !is.na(locality))\n}\n\n\ncommune_level_data &lt;- make_commune_level_data(flat_data)\n\ncommune_level_data\n\n# A tibble: 1,171 × 5\n   year  locality    n_offers average_price_nominal_euros average_price_m2_nom…¹\n   &lt;chr&gt; &lt;chr&gt;          &lt;dbl&gt;                       &lt;dbl&gt;                  &lt;dbl&gt;\n 1 2010  Bascharage       192                     593698.                  3604.\n 2 2010  Beaufort         266                     461160.                  2903.\n 3 2010  Bech              65                     621760.                  3281.\n 4 2010  Beckerich        176                     444499.                  2868.\n 5 2010  Berdorf          111                     504041.                  3056.\n 6 2010  Bertrange        264                     795339.                  4266.\n 7 2010  Bettembourg      304                     555628.                  3343.\n 8 2010  Bettendorf        94                     495074.                  3235.\n 9 2010  Betzdorf         119                     625914.                  3343.\n10 2010  Bissen            70                     516466.                  3322.\n# ℹ 1,161 more rows\n# ℹ abbreviated name: ¹​average_price_m2_nominal_euros\n\n\nWe now save the dataset in a folder for further analysis (keep chunk option to eval = FALSE to avoid running it when knitting):\n\nwrite.csv(commune_level_data,\n          \"datasets/house_prices_commune_level_data.csv\",\n          row.names = FALSE)\nwrite.csv(country_level_data,\n          \"datasets/house_prices_country_level_data.csv\",\n          row.names = FALSE)"
+  }
+]
